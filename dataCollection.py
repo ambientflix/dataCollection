@@ -9,7 +9,7 @@ from nltk.tokenize import word_tokenize
 import os
 from newsapi import NewsApiClient
 import json
-import twecoll
+#import twecoll
 
 # Authorizes access to the Twitter API
 def twitter_auth():
@@ -35,9 +35,8 @@ def get_twitter_client():
 def hasNumbers(inputString):
     return any(char.isdigit() for char in inputString)
 
-def fetchFeedTweets():
+def fetchFeedTweets(screen_name):
     s = ""
-    user = "Allen_Lin_"
     stop_words = set(stopwords.words('english'))
     # Downloads dictionary of English words
     nltk.download('words')
@@ -48,7 +47,7 @@ def fetchFeedTweets():
     client = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
     # Get's the last 50 tweets in your feed... this would be from people you follow and what
     # they tweet or retweet
-    for status in tweepy.Cursor(client.home_timeline, screen_name=user).items(50):
+    for status in tweepy.Cursor(client.home_timeline, screen_name=screen_name).items(100):
         s += status.text
 
     #Clears any non english words or letters from the output string
@@ -63,7 +62,7 @@ def fetchFeedTweets():
     for word in words:
         # Deletes any strings with numbers in them
         if not hasNumbers(word):
-            if word not in stop_words:
+            if word not in stop_words and word != "get":
                 feedData.writelines("(tweet)"+word+"\n")
 
 def fetchNews():
@@ -90,10 +89,59 @@ def fetchNews():
         words = [word.lower() for word in stripped]
         for word in words:
             if word not in stop_words:
-                f.write("(news)"+word+"\n")
+                if word != "get":
+                    if word != query.lower():
+                        f.write("(news)"+word+"\n")
 
-def readTwecoll():
-    f = open("Allen_Lin_.dat")
+def getFriends(screen_name):
+    friends = []
+    max_retry_count = 0 # create a max retry count so we don't have an infinite loop
+
+    api_key = "DSt3NyAqOGFEGyUWzLRYZcx1g"
+    api_secret = "581Fs2Q0hDctuMISQ83EkNp8xwc5JSu2wWB18hbYfjpR55dvO5"
+
+    r = requests.post('https://api.twitter.com/oauth2/token?grant_type=client_credentials', auth=(api_key,api_secret))
+    access_token = r.json()["access_token"]
+    headers = {'Authorization':'Bearer {token}'.format(token=access_token)}
+
+    next_cursor = -1
+
+    while(next_cursor != 0):
+        r = requests.get('https://api.twitter.com/1.1/friends/list.json?cursor={cursor}&screen_name={screen_name}&include_user_entities=true&skip_status=true&count=200'.format(cursor=next_cursor, screen_name=screen_name), headers=headers)
+
+        if (r.status_code == 200):
+            data = r.json()
+            data_friends = [{ "id_str": user["id_str"], "screen_name":user["screen_name"], "friends_count":user["friends_count"]} for user in data["users"]]
+            friends.extend(data_friends)
+
+            next_cursor = data["next_cursor"]
+            max_retry_count = 0
+        elif (r.status_code == 401):
+            next_cursor = 0
+        else:
+            max_retry_count = max_retry_count + 1
+            print(r.status_code)
+            print(max_retry_count)
+            if (max_retry_count >= 20):
+                raise Exception('max_retry_count limit reached')
+            time.sleep(60)
+
+    infoList = list()
+    # Establishes connection to tweepy
+    auth = twitter_auth()
+    client = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
+
+    for friend in friends:
+        id_str = friend["id_str"]
+        a = client.get_user(id_str).name.encode('ascii', "ignore").decode()
+        infoList.append(["(name)" + a + "\n"])
+
+    followerData = open("outputFile.txt", "a")
+    for row in infoList:
+        for val in row:
+            followerData.writelines(val)
+
+    '''f = open("Allen_Lin_.dat")
     infoList = list()
     # Establishes connection to tweepy
     auth = twitter_auth()
@@ -104,11 +152,14 @@ def readTwecoll():
         a = client.get_user(str(info[0]).rstrip()).name.encode('ascii', "ignore").decode()
         location = info[10].rstrip().encode('ascii', "ignore").decode()
         # Appending their twitter ID, twitter name, and twitter location into a list
-        infoList.append(["(id)" + str(info[0]).rstrip()+"\n", "(name)" + a + "\n", "(location)" + location+"\n"])
+        infoList.append(["(name)" + a + "\n", "(location)" + location+"\n"])
     followerData = open("outputFile.txt", "a")
     for row in infoList:
         for val in row:
-            followerData.writelines(val)
+            followerData.writelines(val)'''
+
+def convCelToFar(degrees):
+    return degrees * 9 / 5 + 32;
 
 def collectWeather(location):
     access_key = "12f055de782cfa6ac8cc58e120e297c2";
@@ -116,14 +167,29 @@ def collectWeather(location):
     response = requests.get(url)
     todos = json.loads(response.text)
     followerData = open("outputFile.txt", "a")
-    followerData.writelines(todos['location']['name'] + "\n")
-    followerData.writelines(todos['current']['temperature'] + "\n")
+    followerData.writelines("(city)" + todos['location']['name'] + "\n")
+    followerData.writelines("(state)" + todos['location']['region'] + "\n")
+    temperature = convCelToFar(todos['current']['temperature'])
+    temp_type = ""
+    if temperature < 32:
+        temp_type = 'freezing'
+    elif temperature < 50:
+        temp_type = 'cold'
+    elif temperature < 70:
+        temp_type = 'cool'
+    elif temperature < 90:
+        temp_type = "warm"
+    else:
+        temp_type = "hot"
+    followerData.writelines("(temperature)" + temp_type + "\n")
     weather_descrptions = todos['current']['weather_descriptions']
     for w in weather_descrptions:
-        followerData.writelines(w + "\n")
-    followerData.writelines(todos['current']['humidity'] + "\n")
+        followerData.writelines("(weather_desc)" + w + "\n")
 
-fetchFeedTweets()
-readTwecoll()
+location = input("Enter your city (ex. Chicago): ")
+screen_name = input("Enter your Twitter handle (ex. VancityReynolds): ")
+
+fetchFeedTweets(screen_name)
+getFriends(screen_name)
 fetchNews()
-collectWeather()
+collectWeather(location)
